@@ -484,6 +484,7 @@ fn gen_corelib(
         "FillRule",
         "MouseCursorInner",
         "InputType",
+        "CapitalizationMode",
         "StandardButtonKind",
         "DialogButtonRole",
         "FocusReason",

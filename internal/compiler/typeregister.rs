@@ -828,9 +828,6 @@ pub mod builtin_structs {
     ///
     /// Panics on malformed input: that is a programmer error in builtin_structs.rs,
     /// which fails instantly in every use of the compiler.
-    // Expanded by declare_builtin_structs only for fields that declare a default value;
-    // no builtin struct field does yet
-    #[allow(dead_code)]
     pub(super) fn builtin_field_default(
         tokens: &str,
         field_type: &Type,
