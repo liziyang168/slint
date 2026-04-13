@@ -574,20 +574,20 @@ fn lower_sub_component(
                 },
             );
 
-            let is_state_info = matches!(
+            let kind = if matches!(
                 e.borrow().lookup_property(p).property_type,
                 Type::Struct(s) if matches!(s.name, StructName::Builtin(BuiltinStruct::StateInfo))
-            );
+            ) {
+                BindingKind::State
+            } else if is_constant {
+                BindingKind::Constant
+            } else {
+                BindingKind::Normal
+            };
 
             sub_component.property_init.push((
                 prop.clone(),
-                BindingExpression {
-                    expression,
-                    animation,
-                    is_constant,
-                    is_state_info,
-                    use_count: 0.into(),
-                },
+                BindingExpression { expression, animation, kind, use_count: 0.into() },
             ));
         }
 
@@ -1119,8 +1119,7 @@ fn lower_global_expressions(
             BindingExpression {
                 expression: expression.into(),
                 animation,
-                is_constant,
-                is_state_info: false,
+                kind: if is_constant { BindingKind::Constant } else { BindingKind::Normal },
                 use_count: 0.into(),
             },
         );
