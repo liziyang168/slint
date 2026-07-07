@@ -282,7 +282,6 @@ fn generate_public_api_for_properties(
     private_properties: &llr::PrivateProperties,
 ) {
     for (prop_name, p) in public_properties {
-
         if let Type::Callback(callback) = &p.ty {
             let ret = callback.return_type.cpp_type().unwrap();
             let param_types =

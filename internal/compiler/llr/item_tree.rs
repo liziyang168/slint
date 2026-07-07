@@ -180,7 +180,7 @@ pub enum LocalMemberIndex {
         /// Disambiguates rtti property bindings from rtti callback
         /// handlers (and from member-function calls handled by
         /// `Expression::ItemMemberFunctionCall`). Lowering resolves
-        /// this from the element's declared property type; codegens
+        /// this from the element's declared property type; code generators
         /// and the interpreter dispatch on it rather than probing
         /// the rtti tables by name.
         kind: NativeMemberKind,
