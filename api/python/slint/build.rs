@@ -30,13 +30,27 @@ fn map_default(ty: &str) -> &str {
     }
 }
 
+/// The Python form of a field default value declared in builtin_structs.rs
+fn declared_default(tokens: &str) -> String {
+    use i_slint_common::builtin_structs::BuiltinStructFieldDefault;
+    match i_slint_common::builtin_structs::parse_builtin_struct_field_default(tokens) {
+        BuiltinStructFieldDefault::Bool(true) => "True".into(),
+        BuiltinStructFieldDefault::Bool(false) => "False".into(),
+        // Enum members are named after the kebab-case value, with underscores
+        BuiltinStructFieldDefault::EnumValue { enum_name, variant } => {
+            format!("{}.{}", enum_name, to_kebab_case(&variant).replace('-', "_"))
+        }
+        BuiltinStructFieldDefault::Number { text, .. } => text,
+    }
+}
+
 macro_rules! generate_builtin_structs_pyi {
     ($(
         $(#[doc = $struct_doc:literal])*
         $(#[non_exhaustive])?
         $(#[derive(Copy, Eq)])?
         $vis:vis struct $Name:ident {
-            $( $(#[doc = $field_doc:literal])* $field:ident : $field_type:ident, )*
+            $( $(#[doc = $field_doc:literal])* $field:ident : $field_type:ident $(= $field_default:expr)?, )*
         }
     )*) => {
         fn generate_pyi(writer: &mut impl Write) {
@@ -66,7 +80,10 @@ macro_rules! generate_builtin_structs_pyi {
                     }
                     writeln!(writer, "").unwrap();
                     $(
-                        writeln!(writer, "    {}: {} = {}", stringify!($field), map_type(stringify!($field_type)), map_default(stringify!($field_type))).unwrap();
+                        let default = i_slint_common::builtin_struct_field_default_tokens!($($field_default)?)
+                            .map(declared_default)
+                            .unwrap_or_else(|| map_default(stringify!($field_type)).to_string());
+                        writeln!(writer, "    {}: {} = {}", stringify!($field), map_type(stringify!($field_type)), default).unwrap();
                         let field_doc_str = vec![$($field_doc),*].join("\n").trim().to_string();
                         if !field_doc_str.is_empty() {
                             writeln!(writer, "    \"\"\"").unwrap();

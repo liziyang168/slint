@@ -124,13 +124,26 @@ fn builtin_structs(path: &Path) -> anyhow::Result<()> {
     writeln!(structs_priv, "#include \"private/slint_keys.h\"")?;
     writeln!(structs_priv, "namespace slint::cbindgen_private {{")?;
     writeln!(structs_priv, "enum class KeyEventType : uint8_t;")?;
+    /// The C++ form of a builtin struct field default value declared in builtin_structs.rs
+    fn cpp_field_default(tokens: &str) -> String {
+        use i_slint_common::builtin_structs::BuiltinStructFieldDefault;
+        match i_slint_common::builtin_structs::parse_builtin_struct_field_default(tokens) {
+            BuiltinStructFieldDefault::Bool(b) => b.to_string(),
+            BuiltinStructFieldDefault::Number { text, .. } => text,
+            // Enum values keep their Rust name in C++
+            BuiltinStructFieldDefault::EnumValue { enum_name, variant } => {
+                format!("{enum_name}::{variant}")
+            }
+        }
+    }
+
     macro_rules! print_structs {
         ($(
             $(#[doc = $struct_doc:literal])*
             $(#[non_exhaustive])?
             $(#[derive(Copy, Eq)])?
             $vis:vis struct $Name:ident {
-                $( $(#[doc = $field_doc:literal])* $field:ident : $field_type:ty, )*
+                $( $(#[doc = $field_doc:literal])* $field:ident : $field_type:ty $(= $field_default:expr)?, )*
             }
         )*) => {
             $(
@@ -142,6 +155,11 @@ fn builtin_structs(path: &Path) -> anyhow::Result<()> {
                 };
                 $(writeln!(file, "///{}", $struct_doc)?;)*
                 writeln!(file, "struct {} {{", stringify!($Name))?;
+                // When any field has a declared default value, initialize the remaining
+                // fields, too, so that default construction is fully deterministic,
+                // like for structs declared in .slint
+                let declared_defaults: &[&str] = &[$($(stringify!($field_default),)?)*];
+                let has_defaults = !declared_defaults.is_empty();
                 $(
                     $(writeln!(file, "    ///{}", $field_doc)?;)*
                     let field_type = match stringify!($field_type) {
@@ -149,7 +167,14 @@ fn builtin_structs(path: &Path) -> anyhow::Result<()> {
                         "f32" | "Coord" => "float",
                         other => other,
                     };
-                    writeln!(file, "    {} {};", field_type, stringify!($field))?;
+                    let declared: Option<&str> =
+                        i_slint_common::builtin_struct_field_default_tokens!($($field_default)?);
+                    let init = match declared {
+                        Some(tokens) => format!(" = {}", cpp_field_default(tokens)),
+                        None if has_defaults => " = {}".to_string(),
+                        None => String::new(),
+                    };
+                    writeln!(file, "    {} {}{};", field_type, stringify!($field), init)?;
                 )*
                 writeln!(file, "    /// \\private")?;
                 writeln!(file, "    {}", format!("friend bool operator==(const {name}&, const {name}&) = default;", name = stringify!($Name)))?;
@@ -259,7 +284,7 @@ fn live_preview_enums(path: &Path) -> anyhow::Result<()> {
     let mut structs: Vec<(String, Vec<String>)> = Vec::new();
     macro_rules! collect_structs {
         ($( $(#[$attr:meta])* $vis:vis struct $Name:ident {
-            $( $(#[$field_attr:meta])* $field:ident : $ty:ty,)*
+            $( $(#[$field_attr:meta])* $field:ident : $ty:ty $(= $field_default:expr)?,)*
         })*) => {
             $(
                 if stringify!($vis) == "pub"

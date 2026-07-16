@@ -502,7 +502,7 @@ impl TypeRegister {
             ($(
                 $(#[$attr:meta])*
                 $vis:vis struct $Name:ident {
-                    $( $(#[$field_attr:meta])* $field:ident : $field_type:ident, )*
+                    $( $(#[$field_attr:meta])* $field:ident : $field_type:ident $(= $field_default:expr)?, )*
                 }
             )*) => { $(
                 register.insert_type_with_name(Type::Struct(builtin_structs::$Name()), SmolStr::new(stringify!($Name)));
@@ -822,6 +822,60 @@ pub mod builtin_structs {
         pub static BUILTIN_STRUCTS: BuiltinStructs = BuiltinStructs::new();
     }
 
+    /// Translate a builtin struct field default value, as written in builtin_structs.rs and
+    /// `stringify!`-ed by the macro, into the same [`ConstantExpression`] shape that
+    /// resolving a user struct's field default produces.
+    ///
+    /// Panics on malformed input: that is a programmer error in builtin_structs.rs,
+    /// which fails instantly in every use of the compiler.
+    // Expanded by declare_builtin_structs only for fields that declare a default value;
+    // no builtin struct field does yet
+    #[allow(dead_code)]
+    pub(super) fn builtin_field_default(
+        tokens: &str,
+        field_type: &Type,
+    ) -> crate::langtype::ConstantExpression {
+        use crate::expression_tree::Unit;
+        use crate::langtype::ConstantExpression;
+        use i_slint_common::builtin_structs::BuiltinStructFieldDefault;
+        let parsed = i_slint_common::builtin_structs::parse_builtin_struct_field_default(tokens);
+        match (parsed, field_type) {
+            (BuiltinStructFieldDefault::Bool(b), Type::Bool) => ConstantExpression::BoolLiteral(b),
+            (BuiltinStructFieldDefault::EnumValue { enum_name, variant }, Type::Enumeration(e)) => {
+                assert_eq!(
+                    enum_name,
+                    e.name.as_str(),
+                    "field default `{tokens}` references the wrong enum"
+                );
+                let variant = crate::generator::to_kebab_case(&variant);
+                ConstantExpression::EnumerationValue(
+                    e.clone().try_value_from_string(&variant).unwrap_or_else(|| {
+                        panic!("unknown enum variant in field default `{tokens}`")
+                    }),
+                )
+            }
+            (BuiltinStructFieldDefault::Number { value, .. }, Type::Float32) => {
+                ConstantExpression::NumberLiteral(value, Unit::None)
+            }
+            (BuiltinStructFieldDefault::Number { value, .. }, Type::Int32) => {
+                assert_eq!(value.fract(), 0.0, "int field default `{tokens}` must be integral");
+                ConstantExpression::Cast {
+                    from: Box::new(ConstantExpression::NumberLiteral(value, Unit::None)),
+                    to: Type::Int32,
+                }
+            }
+            // `Coord` fields are logical lengths, and their defaults are stored like
+            // a `px` literal of a user struct field default
+            (BuiltinStructFieldDefault::Number { value, .. }, Type::LogicalLength) => {
+                ConstantExpression::NumberLiteral(value, Unit::Px)
+            }
+            _ => panic!(
+                "field default `{tokens}` is not supported for {field_type} fields \
+                in builtin structs"
+            ),
+        }
+    }
+
     #[rustfmt::skip]
     macro_rules! map_type {
         ($pub_type:ident, bool) => { Type::Bool };
@@ -849,7 +903,7 @@ pub mod builtin_structs {
         ($(
             $(#[$attr:meta])*
             $vis:vis struct $Name:ident {
-                $( $(#[$field_attr:meta])* $field:ident : $field_type:ident, )*
+                $( $(#[$field_attr:meta])* $field:ident : $field_type:ident $(= $field_default:expr)?, )*
             }
         )*) => {
             pub struct BuiltinStructs {
@@ -862,12 +916,21 @@ pub mod builtin_structs {
                 pub fn new() -> Self {
                     $(
                     #[allow(non_snake_case)]
-                    let $Name = Rc::new(Struct::new(
-                        BTreeMap::from([
-                            $((stringify!($field).replace_smolstr("_", "-"), map_type!($field_type, $field_type))),*
-                        ]),
-                        BuiltinStruct::$Name,
-                    ));
+                    let $Name = {
+                        let mut fields = BTreeMap::new();
+                        #[allow(unused_mut)]
+                        let mut field_defaults = BTreeMap::new();
+                        $(
+                        let field_name = stringify!($field).replace_smolstr("_", "-");
+                        let field_type = map_type!($field_type, $field_type);
+                        $(field_defaults.insert(
+                            field_name.clone(),
+                            builtin_field_default(stringify!($field_default), &field_type),
+                        );)?
+                        fields.insert(field_name, field_type);
+                        )*
+                        Rc::new(Struct { fields, field_defaults, name: BuiltinStruct::$Name.into() })
+                    };
                     )*
 
                     Self {
@@ -923,4 +986,58 @@ pub fn layout_item_info_type() -> Type {
 /// The [`Type`] for a runtime FlexboxLayoutItemInfo structure
 pub fn flexbox_layout_item_info_type() -> Type {
     BUILTIN.with(|types| types.flexbox_layout_item_info_type.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expression_tree::Unit;
+    use crate::langtype::ConstantExpression;
+
+    #[test]
+    fn builtin_field_default_parsing() {
+        // stringify! of raw tokens inserts spaces
+        assert!(matches!(
+            builtin_structs::builtin_field_default("- 1.5", &Type::Float32),
+            ConstantExpression::NumberLiteral(n, Unit::None) if n == -1.5
+        ));
+        assert!(matches!(
+            builtin_structs::builtin_field_default("true", &Type::Bool),
+            ConstantExpression::BoolLiteral(true)
+        ));
+        assert!(matches!(
+            builtin_structs::builtin_field_default("42", &Type::Int32),
+            ConstantExpression::Cast { from, to: Type::Int32 }
+                if matches!(&*from, ConstantExpression::NumberLiteral(n, Unit::None) if *n == 42.0)
+        ));
+        // `Coord` fields are logical lengths and store their defaults like a `px` literal
+        assert!(matches!(
+            builtin_structs::builtin_field_default("1.5", &Type::LogicalLength),
+            ConstantExpression::NumberLiteral(n, Unit::Px) if n == 1.5
+        ));
+        let sort_order = BUILTIN.with(|e| e.enums.SortOrder.clone());
+        assert!(matches!(
+            builtin_structs::builtin_field_default(
+                "SortOrder :: Descending",
+                &Type::Enumeration(sort_order),
+            ),
+            ConstantExpression::EnumerationValue(v) if v.to_string() == "descending"
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "references the wrong enum")]
+    fn builtin_field_default_wrong_enum() {
+        let sort_order = BUILTIN.with(|e| e.enums.SortOrder.clone());
+        builtin_structs::builtin_field_default(
+            "TextHorizontalAlignment :: left",
+            &Type::Enumeration(sort_order),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not supported")]
+    fn builtin_field_default_unsupported_type() {
+        builtin_structs::builtin_field_default("42", &Type::String);
+    }
 }

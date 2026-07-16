@@ -690,7 +690,7 @@ macro_rules! define_builtin_struct_enum {
     ($(
         $(#[$attr:meta])*
         $vis:vis struct $Name:ident {
-            $( $(#[$field_attr:meta])* $field:ident : $field_type:ty, )*
+            $( $(#[$field_attr:meta])* $field:ident : $field_type:ty $(= $field_default:expr)?, )*
         }
     )*) => {
         #[derive(Debug, Clone, PartialEq, strum::EnumString, strum::IntoStaticStr)]
@@ -998,7 +998,8 @@ impl From<BuiltinStruct> for StructName {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub fields: BTreeMap<SmolStr, Type>,
-    /// User-declared default values for fields (`struct Foo { bar: int = 42 }`).
+    /// Declared default values for fields: `struct Foo { bar: int = 42 }` in .slint,
+    /// or `bar: i32 = 42` in builtin_structs.rs for builtin structs.
     /// The expressions are resolved, converted to the field type, and constant-folded.
     /// Like the syntax node in `name`, this is ignored by `Type`'s equality comparison.
     pub field_defaults: BTreeMap<SmolStr, ConstantExpression>,
@@ -1006,8 +1007,7 @@ pub struct Struct {
 }
 
 impl Struct {
-    /// Create a struct without user-declared field default values
-    /// (only named struct declarations in .slint can have those).
+    /// Create a struct without declared field default values.
     pub fn new(fields: BTreeMap<SmolStr, Type>, name: impl Into<StructName>) -> Self {
         Self { fields, field_defaults: Default::default(), name: name.into() }
     }
